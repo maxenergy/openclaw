@@ -41,6 +41,7 @@ type PromptEnhancerModelOutput = {
 };
 
 export type PromptEnhancerResult = { kind: "reply"; reply: ReplyPayload } | { kind: "continue" };
+export type PromptEnhancerMode = "off" | "auto" | "manual";
 
 type PromptEnhancerParams = {
   ctx: MsgContext;
@@ -60,8 +61,23 @@ type PromptEnhancerParams = {
   opts?: GetReplyOptions;
 };
 
-function isPromptEnhancerEnabled(cfg: OpenClawConfig): boolean {
-  return cfg.agents?.defaults?.promptEnhancer?.enabled === true;
+export function resolvePromptEnhancerMode(params: {
+  cfg: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+}): PromptEnhancerMode {
+  const sessionMode =
+    params.sessionEntry?.promptEnhancerMode ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.promptEnhancerMode : undefined);
+  if (sessionMode === "off" || sessionMode === "auto" || sessionMode === "manual") {
+    return sessionMode;
+  }
+  const configuredMode = params.cfg.agents?.defaults?.promptEnhancer?.mode;
+  if (configuredMode === "off" || configuredMode === "auto" || configuredMode === "manual") {
+    return configuredMode;
+  }
+  return params.cfg.agents?.defaults?.promptEnhancer?.enabled === true ? "auto" : "off";
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
@@ -89,7 +105,10 @@ function clampPromptText(value: string): string {
 
 function parsePromptCommand(
   raw: string,
-): { action: "show" | "run" | "cancel" | "edit"; args?: string } | null {
+):
+  | { action: "show" | "run" | "cancel" | "edit" | "draft"; args?: string }
+  | { action: "mode"; mode: PromptEnhancerMode }
+  | null {
   const trimmed = raw.trim();
   if (!trimmed.toLowerCase().startsWith(PROMPT_COMMAND)) {
     return null;
@@ -107,7 +126,14 @@ function parsePromptCommand(
     const nextArgs = args.join(" ").trim();
     return { action: "edit", args: nextArgs || undefined };
   }
-  return null;
+  if (action === "draft" || action === "create") {
+    const nextArgs = args.join(" ").trim();
+    return { action: "draft", args: nextArgs || undefined };
+  }
+  if (action === "off" || action === "auto" || action === "manual") {
+    return { action: "mode", mode: action };
+  }
+  return { action: "draft", args: rest };
 }
 
 function parseEnhancerJson(raw: string): PromptEnhancerModelOutput | null {
@@ -214,15 +240,42 @@ export function buildPromptDraftReply(
   return { text: sections.join("\n\n") };
 }
 
-function buildPromptDraftMissingReply(): ReplyPayload {
+function buildPromptEnhancerStatusReply(mode: PromptEnhancerMode): ReplyPayload {
+  const modeText =
+    mode === "auto"
+      ? "Prompt enhancer mode: auto. Normal text messages will be drafted before execution."
+      : mode === "manual"
+        ? "Prompt enhancer mode: manual. Normal text messages execute directly unless you explicitly create a draft."
+        : "Prompt enhancer mode: off. Messages execute directly without prompt drafting.";
   return {
-    text: "No pending prompt draft. Send a normal message first to generate one.",
+    text: [
+      modeText,
+      "Switch with `/prompt auto`, `/prompt manual`, or `/prompt off`.",
+      "Create a draft with `/prompt <request>` or `/prompt draft <request>`.",
+      "Review a pending draft with `/prompt show`, then `/prompt run|edit|cancel`.",
+    ].join("\n\n"),
+  };
+}
+
+function buildPromptDraftMissingReply(mode: PromptEnhancerMode): ReplyPayload {
+  return {
+    text:
+      mode === "manual"
+        ? "No pending prompt draft. Use `/prompt <request>` or `/prompt draft <request>` to create one."
+        : "No pending prompt draft. Send a normal message first to generate one.",
   };
 }
 
 function buildPendingDraftReminderReply(): ReplyPayload {
   return {
     text: "A prompt draft is waiting for review. Reply with `/prompt run`, `/prompt edit <changes>`, `/prompt show`, or `/prompt cancel`.",
+  };
+}
+
+function buildPromptEnhancerDisabledReply(): ReplyPayload {
+  return {
+    text: "Prompt enhancement is off for this session. Use `/prompt manual` or `/prompt auto`, or set `agents.defaults.promptEnhancer.mode` to `manual` or `auto`.",
+    isError: true,
   };
 }
 
@@ -415,14 +468,26 @@ function applyConfirmedPrompt(params: {
 }): void {
   params.ctx.Body = params.draft.enhancedPrompt;
   params.ctx.BodyForAgent = params.draft.enhancedPrompt;
+  params.ctx.RawBody = params.draft.enhancedPrompt;
+  params.ctx.CommandBody = params.draft.enhancedPrompt;
+  params.ctx.BodyForCommands = params.draft.enhancedPrompt;
   params.sessionCtx.Body = params.draft.enhancedPrompt;
   params.sessionCtx.BodyForAgent = params.draft.enhancedPrompt;
+  params.sessionCtx.RawBody = params.draft.enhancedPrompt;
+  params.sessionCtx.CommandBody = params.draft.enhancedPrompt;
+  params.sessionCtx.BodyForCommands = params.draft.enhancedPrompt;
   params.sessionCtx.BodyStripped = params.draft.enhancedPrompt;
 }
 
 export async function maybeHandlePromptEnhancer(
   params: PromptEnhancerParams,
 ): Promise<PromptEnhancerResult | null> {
+  const mode = resolvePromptEnhancerMode({
+    cfg: params.cfg,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+  });
   const pendingDraft = await resolveActiveDraft({
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
@@ -433,6 +498,9 @@ export async function maybeHandlePromptEnhancer(
   const latestPromptText = resolveLatestPromptText(params.sessionCtx, params.cleanedBody);
 
   if (pendingDraft) {
+    if (promptCommand?.action === "mode") {
+      return { kind: "reply", reply: buildPromptEnhancerStatusReply(mode) };
+    }
     if (promptCommand?.action === "show") {
       return { kind: "reply", reply: buildPromptDraftReply(pendingDraft, "updated") };
     }
@@ -463,6 +531,13 @@ export async function maybeHandlePromptEnhancer(
         draft: pendingDraft,
       });
       return { kind: "continue" };
+    }
+
+    if (mode === "off") {
+      if (promptCommand?.action === "edit" || promptCommand?.action === "draft") {
+        return { kind: "reply", reply: buildPromptEnhancerDisabledReply() };
+      }
+      return null;
     }
 
     const editFeedback =
@@ -516,10 +591,69 @@ export async function maybeHandlePromptEnhancer(
   }
 
   if (promptCommand) {
-    return { kind: "reply", reply: buildPromptDraftMissingReply() };
+    if (promptCommand.action === "mode") {
+      return { kind: "reply", reply: buildPromptEnhancerStatusReply(mode) };
+    }
+    if (promptCommand.action === "show") {
+      return { kind: "reply", reply: buildPromptEnhancerStatusReply(mode) };
+    }
+    if (promptCommand.action === "draft") {
+      if (mode === "off") {
+        return { kind: "reply", reply: buildPromptEnhancerDisabledReply() };
+      }
+      const promptText = promptCommand.args?.trim() ?? "";
+      if (!promptText) {
+        return {
+          kind: "reply",
+          reply: {
+            text: "Usage: /prompt <request> or /prompt draft <request>",
+          },
+        };
+      }
+      if (isCliProvider(params.provider, params.cfg)) {
+        return {
+          kind: "reply",
+          reply: {
+            text: "Prompt enhancement is not available for CLI-backed providers yet.",
+            isError: true,
+          },
+        };
+      }
+      try {
+        const draft = await runPromptEnhancerModel({
+          mode: "create",
+          promptText,
+          provider: params.provider,
+          model: params.model,
+          agentId: params.agentId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          sessionEntry: params.sessionEntry,
+          sessionKey: params.sessionKey,
+        });
+        await persistPromptDraft({
+          sessionEntry: params.sessionEntry,
+          sessionStore: params.sessionStore,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          nextDraft: draft,
+        });
+        return { kind: "reply", reply: buildPromptDraftReply(draft, "new") };
+      } catch (err) {
+        return {
+          kind: "reply",
+          reply: buildPromptEnhancerErrorReply(String(err)),
+        };
+      }
+    }
+    return {
+      kind: "reply",
+      reply: buildPromptDraftMissingReply(mode),
+    };
   }
 
-  if (!isPromptEnhancerEnabled(params.cfg) || params.opts?.isHeartbeat) {
+  if (mode !== "auto" || params.opts?.isHeartbeat) {
     return null;
   }
   if (!latestPromptText || hasInboundMedia(params.sessionCtx)) {

@@ -26,6 +26,7 @@ import { handlePluginCommand } from "./commands-plugin.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
+  handlePromptModeCommand,
   handleRestartCommand,
   handleSessionCommand,
   handleSendPolicyCommand,
@@ -174,6 +175,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handlePluginCommand,
       handleBashCommand,
       handleActivationCommand,
+      handlePromptModeCommand,
       handleSendPolicyCommand,
       handleUsageCommand,
       handleSessionCommand,

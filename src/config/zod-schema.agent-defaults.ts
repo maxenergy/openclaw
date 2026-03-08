@@ -53,6 +53,7 @@ export const AgentDefaultsSchema = z
     memorySearch: MemorySearchSchema,
     promptEnhancer: z
       .object({
+        mode: z.union([z.literal("off"), z.literal("auto"), z.literal("manual")]).optional(),
         enabled: z.boolean().optional(),
       })
       .strict()

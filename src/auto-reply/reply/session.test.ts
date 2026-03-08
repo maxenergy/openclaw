@@ -1380,6 +1380,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       verboseLevel: "on",
       thinkingLevel: "high",
       reasoningLevel: "low",
+      promptEnhancerMode: "manual",
       label: "telegram-priority",
     } as const;
     const cases = [

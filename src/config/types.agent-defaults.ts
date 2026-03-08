@@ -185,7 +185,14 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Optional prompt enhancement + confirmation stage before execution. */
   promptEnhancer?: {
-    /** When enabled, inbound text first becomes a reviewed draft before the agent runs. */
+    /**
+     * Prompt enhancer mode:
+     * - off: disable prompt enhancement and execute messages directly
+     * - auto: automatically draft + confirm normal text before execution
+     * - manual: execute normal text directly; only `/prompt ...` creates drafts
+     */
+    mode?: "off" | "auto" | "manual";
+    /** Legacy compatibility alias: true => auto, false => off when `mode` is unset. */
     enabled?: boolean;
   };
   /** Default thinking level when no /think directive is present. */

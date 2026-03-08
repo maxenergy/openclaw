@@ -191,7 +191,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "prompt",
       nativeName: "prompt",
-      description: "Review or confirm a pending prompt draft before execution.",
+      description: "Create, review, or confirm a prompt draft before execution.",
       textAlias: "/prompt",
       acceptsArgs: true,
       category: "management",

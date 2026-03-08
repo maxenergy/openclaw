@@ -29,12 +29,15 @@ vi.mock("../../config/sessions.js", async () => {
 
 const { maybeHandlePromptEnhancer } = await import("./prompt-enhancer.js");
 
-function buildCfg(enabled = true): OpenClawConfig {
+function buildCfg(
+  params: { enabled?: boolean; mode?: "off" | "auto" | "manual" } = {},
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
         promptEnhancer: {
-          enabled,
+          enabled: params.enabled,
+          mode: params.mode,
         },
       },
     },
@@ -137,7 +140,7 @@ describe("maybeHandlePromptEnhancer", () => {
     const result = await maybeHandlePromptEnhancer({
       ctx: buildCtx(),
       sessionCtx: buildSessionCtx(),
-      cfg: buildCfg(true),
+      cfg: buildCfg({ enabled: true }),
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
@@ -192,7 +195,7 @@ describe("maybeHandlePromptEnhancer", () => {
     const result = await maybeHandlePromptEnhancer({
       ctx,
       sessionCtx,
-      cfg: buildCfg(true),
+      cfg: buildCfg({ mode: "auto" }),
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
@@ -209,6 +212,8 @@ describe("maybeHandlePromptEnhancer", () => {
     expect(result).toEqual({ kind: "continue" });
     expect(sessionCtx.BodyStripped).toBe(draft.enhancedPrompt);
     expect(ctx.Body).toBe(draft.enhancedPrompt);
+    expect(ctx.CommandBody).toBe(draft.enhancedPrompt);
+    expect(sessionCtx.BodyForCommands).toBe(draft.enhancedPrompt);
     expect(sessionEntry.promptEnhancerDraft).toBeUndefined();
   });
 
@@ -245,7 +250,7 @@ describe("maybeHandlePromptEnhancer", () => {
         BodyForAgent: "Only touch Telegram docs.",
         BodyStripped: "Only touch Telegram docs.",
       }),
-      cfg: buildCfg(true),
+      cfg: buildCfg({ mode: "manual" }),
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
@@ -284,7 +289,7 @@ describe("maybeHandlePromptEnhancer", () => {
     const result = await maybeHandlePromptEnhancer({
       ctx: buildCtx(),
       sessionCtx: buildSessionCtx(),
-      cfg: buildCfg(true),
+      cfg: buildCfg({ mode: "auto" }),
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
@@ -309,5 +314,201 @@ describe("maybeHandlePromptEnhancer", () => {
         }),
       }),
     );
+  });
+
+  it("does not auto-create drafts in manual mode for normal text", async () => {
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx(),
+      sessionCtx: buildSessionCtx(),
+      cfg: buildCfg({ mode: "manual" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry: buildSessionEntry(),
+      sessionStore: {
+        "agent:main:whatsapp:+1000": buildSessionEntry(),
+      },
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand(),
+      cleanedBody: "Ship a cleaner prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toBeNull();
+    expect(mocks.runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("shows mode help when /prompt has no pending draft", async () => {
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx({
+        Body: "/prompt",
+        BodyForAgent: "/prompt",
+        RawBody: "/prompt",
+        CommandBody: "/prompt",
+      }),
+      sessionCtx: buildSessionCtx({
+        Body: "/prompt",
+        BodyForAgent: "/prompt",
+        BodyStripped: "/prompt",
+      }),
+      cfg: buildCfg({ mode: "manual" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry: buildSessionEntry(),
+      sessionStore: {
+        "agent:main:whatsapp:+1000": buildSessionEntry(),
+      },
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand({ raw: "/prompt", normalized: "/prompt" }),
+      cleanedBody: "/prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "reply",
+        reply: expect.objectContaining({
+          text: expect.stringContaining("Prompt enhancer mode: manual."),
+        }),
+      }),
+    );
+  });
+
+  it("prefers the session mode override over the config default", async () => {
+    const sessionEntry = buildSessionEntry({ promptEnhancerMode: "off" });
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:whatsapp:+1000": sessionEntry,
+    };
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx(),
+      sessionCtx: buildSessionCtx(),
+      cfg: buildCfg({ mode: "auto" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand(),
+      cleanedBody: "Ship a cleaner prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toBeNull();
+    expect(mocks.runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("creates a prompt draft on explicit /prompt input in manual mode", async () => {
+    mocks.runEmbeddedPiAgent.mockResolvedValue({
+      payloads: [
+        {
+          text: JSON.stringify({
+            goal: "Improve onboarding copy",
+            constraints: ["Keep existing structure"],
+            assumptions: [],
+            clarifyingQuestions: [],
+            enhancedPrompt:
+              "Update the onboarding copy while preserving the current doc structure.",
+          }),
+        },
+      ],
+      meta: { durationMs: 11 },
+    });
+
+    const sessionEntry = buildSessionEntry();
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:whatsapp:+1000": sessionEntry,
+    };
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx({
+        Body: "/prompt Ship a cleaner prompt",
+        BodyForAgent: "/prompt Ship a cleaner prompt",
+        RawBody: "/prompt Ship a cleaner prompt",
+        CommandBody: "/prompt Ship a cleaner prompt",
+      }),
+      sessionCtx: buildSessionCtx({
+        Body: "/prompt Ship a cleaner prompt",
+        BodyForAgent: "/prompt Ship a cleaner prompt",
+        BodyStripped: "/prompt Ship a cleaner prompt",
+      }),
+      cfg: buildCfg({ mode: "manual" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand({
+        raw: "/prompt Ship a cleaner prompt",
+        normalized: "/prompt Ship a cleaner prompt",
+      }),
+      cleanedBody: "/prompt Ship a cleaner prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "reply",
+        reply: expect.objectContaining({
+          text: expect.stringContaining("Prompt draft ready."),
+        }),
+      }),
+    );
+    expect(sessionEntry.promptEnhancerDraft?.enhancedPrompt).toBe(
+      "Update the onboarding copy while preserving the current doc structure.",
+    );
+  });
+
+  it("rejects manual prompt draft commands when mode is off", async () => {
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx({
+        Body: "/prompt draft Ship a cleaner prompt",
+        BodyForAgent: "/prompt draft Ship a cleaner prompt",
+        RawBody: "/prompt draft Ship a cleaner prompt",
+        CommandBody: "/prompt draft Ship a cleaner prompt",
+      }),
+      sessionCtx: buildSessionCtx({
+        Body: "/prompt draft Ship a cleaner prompt",
+        BodyForAgent: "/prompt draft Ship a cleaner prompt",
+        BodyStripped: "/prompt draft Ship a cleaner prompt",
+      }),
+      cfg: buildCfg({ mode: "off" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry: buildSessionEntry(),
+      sessionStore: {
+        "agent:main:whatsapp:+1000": buildSessionEntry(),
+      },
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand({
+        raw: "/prompt draft Ship a cleaner prompt",
+        normalized: "/prompt draft Ship a cleaner prompt",
+      }),
+      cleanedBody: "/prompt draft Ship a cleaner prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "reply",
+        reply: expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("Prompt enhancement is off"),
+        }),
+      }),
+    );
+    expect(mocks.runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 });

@@ -27,15 +27,41 @@ import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolvePromptEnhancerMode, type PromptEnhancerMode } from "./prompt-enhancer.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+const PROMPT_MODE_VALUES = new Set<PromptEnhancerMode>(["off", "auto", "manual"]);
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
+}
+
+function parsePromptModeCommand(raw: string): {
+  hasCommand: boolean;
+  mode?: PromptEnhancerMode;
+  hasExtraArgs: boolean;
+} {
+  const trimmed = raw.trim();
+  if (trimmed === "/prompt") {
+    return { hasCommand: false, hasExtraArgs: false };
+  }
+  const match = trimmed.match(/^\/prompt(?:\s+([^\s]+)(?:\s+([\s\S]+))?)?\s*$/i);
+  if (!match) {
+    return { hasCommand: false, hasExtraArgs: false };
+  }
+  const mode = match[1]?.trim().toLowerCase();
+  if (!mode || !PROMPT_MODE_VALUES.has(mode as PromptEnhancerMode)) {
+    return { hasCommand: false, hasExtraArgs: false };
+  }
+  return {
+    hasCommand: true,
+    mode: mode as PromptEnhancerMode,
+    hasExtraArgs: Boolean(match[2]?.trim()),
+  };
 }
 
 function parseSessionDurationMs(raw: string): number {
@@ -202,6 +228,55 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   return {
     shouldContinue: false,
     reply: { text: `⚙️ Send policy set to ${label}.` },
+  };
+};
+
+export const handlePromptModeCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const parsed = parsePromptModeCommand(params.command.commandBodyNormalized);
+  if (!parsed.hasCommand) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /prompt mode switch from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (!parsed.mode || parsed.hasExtraArgs) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /prompt auto|manual|off" },
+    };
+  }
+  const previousMode = resolvePromptEnhancerMode({
+    cfg: params.cfg,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+  });
+  let clearedDraft = false;
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    params.sessionEntry.promptEnhancerMode = parsed.mode;
+    if (params.sessionEntry.promptEnhancerDraft) {
+      delete params.sessionEntry.promptEnhancerDraft;
+      clearedDraft = true;
+    }
+    await persistSessionEntry(params);
+  }
+  const suffix =
+    parsed.mode === previousMode
+      ? "already active for this session."
+      : `set to ${parsed.mode} for this session.`;
+  return {
+    shouldContinue: false,
+    reply: {
+      text: clearedDraft
+        ? `⚙️ Prompt enhancer mode ${suffix} Pending draft canceled.`
+        : `⚙️ Prompt enhancer mode ${suffix}`,
+    },
   };
 };
 

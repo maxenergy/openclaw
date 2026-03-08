@@ -494,6 +494,63 @@ describe("abort trigger command", () => {
   });
 });
 
+describe("handleCommands /prompt mode", () => {
+  it("stores a session-scoped prompt enhancer mode override and clears pending drafts", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          promptEnhancer: {
+            mode: "auto",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/prompt off", cfg);
+    const storePath = path.join(testWorkspaceDir, "sessions-prompt-mode.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      promptEnhancerDraft: {
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        sourcePrompt: "draft me",
+        goal: "Draft the request",
+        constraints: [],
+        assumptions: [],
+        clarifyingQuestions: [],
+        enhancedPrompt: "draft me precisely",
+      },
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+      storePath,
+    });
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Prompt enhancer mode set to off for this session. Pending draft canceled.",
+      },
+    });
+    expect(sessionEntry.promptEnhancerMode).toBe("off");
+    expect(sessionEntry.promptEnhancerDraft).toBeUndefined();
+    const persistedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persistedStore[params.sessionKey]?.promptEnhancerMode).toBe("off");
+    expect(persistedStore[params.sessionKey]?.promptEnhancerDraft).toBeUndefined();
+  });
+});
+
 describe("buildCommandsPaginationKeyboard", () => {
   it("adds agent id to callback data when provided", () => {
     const keyboard = buildCommandsPaginationKeyboard(2, 3, "agent-main");

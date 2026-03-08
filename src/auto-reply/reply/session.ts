@@ -238,6 +238,7 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let persistedPromptEnhancerMode: "off" | "auto" | "manual" | undefined;
   let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
@@ -374,6 +375,7 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
+    persistedPromptEnhancerMode = entry.promptEnhancerMode;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -390,6 +392,7 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
+      persistedPromptEnhancerMode = entry.promptEnhancerMode;
       persistedLabel = entry.label;
     }
   }
@@ -441,6 +444,7 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    promptEnhancerMode: persistedPromptEnhancerMode ?? baseEntry?.promptEnhancerMode,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,

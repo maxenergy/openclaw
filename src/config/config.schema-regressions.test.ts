@@ -175,6 +175,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts promptEnhancer mode", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          promptEnhancer: {
+            mode: "manual",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {

@@ -833,8 +833,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   "agents.defaults.promptEnhancer":
     "Optional pre-execution draft stage that rewrites the latest user request into a clearer prompt, echoes it back, and waits for confirmation before the main agent runs.",
+  "agents.defaults.promptEnhancer.mode":
+    'Controls prompt enhancement behavior: "off" executes messages directly, "auto" drafts and confirms normal text before execution, and "manual" only drafts when you explicitly use `/prompt ...`.',
   "agents.defaults.promptEnhancer.enabled":
-    "When enabled, normal text messages first produce a prompt draft plus `/prompt run|edit|show|cancel` controls instead of immediately executing the main agent.",
+    'Legacy compatibility alias for promptEnhancer.mode. `true` maps to "auto" and `false` maps to "off" when `mode` is unset.',
   memory: "Memory backend configuration (global).",
   "memory.backend":
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
