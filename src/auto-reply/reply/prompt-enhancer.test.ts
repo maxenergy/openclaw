@@ -316,6 +316,123 @@ describe("maybeHandlePromptEnhancer", () => {
     );
   });
 
+  it("accepts json-ish enhancer output with prose, bare keys, and single quotes", async () => {
+    mocks.runEmbeddedPiAgent.mockResolvedValue({
+      payloads: [
+        {
+          text: `Here is the cleaned draft:
+{
+  goal: 'Improve onboarding copy',
+  constraints: ['Keep existing structure',],
+  assumptions: [],
+  clarifyingQuestions: [],
+  enhancedPrompt: 'Update the onboarding copy while preserving the current doc structure.',
+}`,
+        },
+      ],
+      meta: { durationMs: 6 },
+    });
+
+    const sessionEntry = buildSessionEntry();
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:whatsapp:+1000": sessionEntry,
+    };
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx(),
+      sessionCtx: buildSessionCtx(),
+      cfg: buildCfg({ mode: "auto" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand(),
+      cleanedBody: "Ship a cleaner prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "reply",
+        reply: expect.objectContaining({
+          text: expect.stringContaining("Prompt draft ready."),
+        }),
+      }),
+    );
+    expect(sessionEntry.promptEnhancerDraft?.enhancedPrompt).toBe(
+      "Update the onboarding copy while preserving the current doc structure.",
+    );
+    expect(mocks.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs malformed enhancer output with a second formatting pass", async () => {
+    mocks.runEmbeddedPiAgent
+      .mockResolvedValueOnce({
+        payloads: [
+          {
+            text: [
+              "Goal: Improve onboarding copy",
+              "Constraints: Keep existing structure",
+              "Enhanced prompt: Update the onboarding copy while preserving the current doc structure.",
+            ].join("\n"),
+          },
+        ],
+        meta: { durationMs: 5 },
+      })
+      .mockResolvedValueOnce({
+        payloads: [
+          {
+            text: JSON.stringify({
+              goal: "Improve onboarding copy",
+              constraints: ["Keep existing structure"],
+              assumptions: [],
+              clarifyingQuestions: [],
+              enhancedPrompt:
+                "Update the onboarding copy while preserving the current doc structure.",
+            }),
+          },
+        ],
+        meta: { durationMs: 5 },
+      });
+
+    const sessionEntry = buildSessionEntry();
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:whatsapp:+1000": sessionEntry,
+    };
+    const result = await maybeHandlePromptEnhancer({
+      ctx: buildCtx(),
+      sessionCtx: buildSessionCtx(),
+      cfg: buildCfg({ mode: "auto" }),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:whatsapp:+1000",
+      storePath: "/tmp/sessions.json",
+      command: buildCommand(),
+      cleanedBody: "Ship a cleaner prompt",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "reply",
+        reply: expect.objectContaining({
+          text: expect.stringContaining("Prompt draft ready."),
+        }),
+      }),
+    );
+    expect(sessionEntry.promptEnhancerDraft?.enhancedPrompt).toBe(
+      "Update the onboarding copy while preserving the current doc structure.",
+    );
+    expect(mocks.runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+  });
+
   it("does not auto-create drafts in manual mode for normal text", async () => {
     const result = await maybeHandlePromptEnhancer({
       ctx: buildCtx(),

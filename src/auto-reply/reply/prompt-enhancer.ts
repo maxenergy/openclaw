@@ -28,8 +28,20 @@ const PROMPT_ENHANCER_SYSTEM_PROMPT = [
   "If important details are missing, add them to clarifyingQuestions instead of guessing.",
   "Keep enhancedPrompt ready for direct execution by the next agent turn.",
   "Prefer the same language as the user's latest message.",
+  "Do not wrap the JSON in markdown fences.",
+  "Do not add prose before or after the JSON.",
   "Return strict JSON only with this exact schema:",
   '{"goal":"string","constraints":["string"],"assumptions":["string"],"clarifyingQuestions":["string"],"enhancedPrompt":"string"}',
+].join("\n");
+
+const PROMPT_ENHANCER_JSON_REPAIR_SYSTEM_PROMPT = [
+  "You repair OpenClaw prompt enhancer outputs.",
+  "Convert the provided content into strict JSON only.",
+  "Preserve the original intent and wording as much as possible.",
+  "Do not add markdown fences or any prose outside the JSON object.",
+  "Use this exact schema:",
+  '{"goal":"string","constraints":["string"],"assumptions":["string"],"clarifyingQuestions":["string"],"enhancedPrompt":"string"}',
+  "Use empty arrays when a list field is missing.",
 ].join("\n");
 
 type PromptEnhancerModelOutput = {
@@ -136,6 +148,102 @@ function parsePromptCommand(
   return { action: "draft", args: rest };
 }
 
+function replaceSmartQuotes(raw: string): string {
+  return raw
+    .replaceAll("\u201c", '"')
+    .replaceAll("\u201d", '"')
+    .replaceAll("\u2018", "'")
+    .replaceAll("\u2019", "'");
+}
+
+function escapeJsonString(raw: string): string {
+  return JSON.stringify(raw.replaceAll("\\'", "'"));
+}
+
+function collectBalancedJsonObjects(raw: string): string[] {
+  const results: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let stringQuote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (stringQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === stringQuote) {
+        stringQuote = null;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      stringQuote = char;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      if (depth === 0) {
+        continue;
+      }
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        results.push(raw.slice(start, index + 1).trim());
+        start = -1;
+      }
+    }
+  }
+  return results;
+}
+
+function normalizeJsonishCandidate(raw: string): string[] {
+  const trimmed = replaceSmartQuotes(raw.trim().replace(/^\uFEFF/, ""));
+  if (!trimmed) {
+    return [];
+  }
+
+  const variants = new Set<string>([trimmed]);
+  const withoutTrailingCommas = trimmed.replace(/,\s*([}\]])/g, "$1");
+  variants.add(withoutTrailingCommas);
+
+  const bareKeysQuoted = withoutTrailingCommas.replace(
+    /([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g,
+    '$1"$2"$3',
+  );
+  variants.add(bareKeysQuoted);
+
+  const singleQuotedKeys = bareKeysQuoted.replace(
+    /'([^'\\]*(?:\\.[^'\\]*)*)'(?=\s*:)/g,
+    (_match, inner: string) => escapeJsonString(inner),
+  );
+  variants.add(singleQuotedKeys);
+
+  const singleQuotedValues = singleQuotedKeys
+    .replace(
+      /(:\s*)'([^'\\]*(?:\\.[^'\\]*)*)'(?=\s*[,}\]])/g,
+      (_match, prefix: string, inner: string) => `${prefix}${escapeJsonString(inner)}`,
+    )
+    .replace(
+      /([[,]\s*)'([^'\\]*(?:\\.[^'\\]*)*)'(?=\s*[,}\]])/g,
+      (_match, prefix: string, inner: string) => `${prefix}${escapeJsonString(inner)}`,
+    );
+  variants.add(singleQuotedValues);
+
+  return [...variants];
+}
+
 function parseEnhancerJson(raw: string): PromptEnhancerModelOutput | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -147,21 +255,23 @@ function parseEnhancerJson(raw: string): PromptEnhancerModelOutput | null {
   if (fencedMatch?.[1]) {
     candidates.add(fencedMatch[1].trim());
   }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    candidates.add(trimmed.slice(firstBrace, lastBrace + 1));
+  for (const candidate of candidates) {
+    for (const extractedObject of collectBalancedJsonObjects(candidate)) {
+      candidates.add(extractedObject);
+    }
   }
 
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    for (const variant of normalizeJsonishCandidate(candidate)) {
+      try {
+        const parsed = JSON.parse(variant) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          continue;
+        }
+        return parsed as PromptEnhancerModelOutput;
+      } catch {
         continue;
       }
-      return parsed as PromptEnhancerModelOutput;
-    } catch {
-      continue;
     }
   }
   return null;
@@ -214,6 +324,19 @@ function buildEditPrompt(draft: PromptEnhancerDraft, feedback: string): string {
     "",
     "Latest user follow-up:",
     feedback.trim(),
+  ].join("\n");
+}
+
+function buildRepairPrompt(originalPrompt: string, invalidOutput: string): string {
+  return [
+    "The previous prompt-enhancer model output was not valid strict JSON.",
+    "Recover it into the required schema without changing the user's intent.",
+    "",
+    "Original user request:",
+    originalPrompt.trim(),
+    "",
+    "Invalid model output:",
+    invalidOutput.trim(),
   ].join("\n");
 }
 
@@ -418,7 +541,8 @@ async function runPromptEnhancerModel(params: {
   const originalPrompt =
     params.mode === "edit" && params.draft ? params.draft.originalPrompt : params.promptText.trim();
 
-  const modelOutput = await withEnhancerSessionFile(
+  let assistantText = "";
+  let modelOutput = await withEnhancerSessionFile(
     params.sessionEntry?.sessionFile,
     async (sessionFile, sessionId) => {
       const result = await runEmbeddedPiAgent({
@@ -440,23 +564,57 @@ async function runPromptEnhancerModel(params: {
         lane: `prompt-enhancer:${params.sessionKey}`,
         extraSystemPrompt: PROMPT_ENHANCER_SYSTEM_PROMPT,
       });
-      const assistantText = extractEnhancerReplyText(result.payloads);
-      const parsed = parseEnhancerJson(assistantText);
-      if (!parsed) {
-        throw new Error("model did not return valid JSON");
-      }
-      return parsed;
+      assistantText = extractEnhancerReplyText(result.payloads);
+      return parseEnhancerJson(assistantText);
     },
   );
+  let draft = modelOutput
+    ? toPromptDraft({
+        output: modelOutput,
+        originalPrompt,
+        provider: params.provider,
+        model: params.model,
+      })
+    : null;
 
-  const draft = toPromptDraft({
-    output: modelOutput,
-    originalPrompt,
-    provider: params.provider,
-    model: params.model,
-  });
+  if (!modelOutput || !draft) {
+    modelOutput = await withEnhancerSessionFile(
+      params.sessionEntry?.sessionFile,
+      async (sessionFile, sessionId) => {
+        const result = await runEmbeddedPiAgent({
+          sessionId,
+          sessionFile,
+          agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          config: params.cfg,
+          prompt: buildRepairPrompt(originalPrompt, assistantText || params.promptText),
+          provider: params.provider,
+          model: params.model,
+          disableTools: true,
+          thinkLevel: "off",
+          reasoningLevel: "off",
+          verboseLevel: "off",
+          timeoutMs: PROMPT_ENHANCER_TIMEOUT_MS,
+          runId: `prompt-enhancer-repair-${crypto.randomUUID()}`,
+          lane: `prompt-enhancer-repair:${params.sessionKey}`,
+          extraSystemPrompt: PROMPT_ENHANCER_JSON_REPAIR_SYSTEM_PROMPT,
+        });
+        return parseEnhancerJson(extractEnhancerReplyText(result.payloads));
+      },
+    );
+    draft = modelOutput
+      ? toPromptDraft({
+          output: modelOutput,
+          originalPrompt,
+          provider: params.provider,
+          model: params.model,
+        })
+      : null;
+  }
+
   if (!draft) {
-    throw new Error("model returned an empty enhancedPrompt");
+    throw new Error("model did not return usable JSON");
   }
   return draft;
 }
