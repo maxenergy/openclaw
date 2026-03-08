@@ -533,6 +533,9 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    // Pending prompt drafts belong to the previous session intent and must not
+    // leak across /new, /reset, or scheduled session rollovers.
+    sessionEntry.promptEnhancerDraft = undefined;
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;

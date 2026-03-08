@@ -831,6 +831,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Controls how fast older memory loses rank when temporal decay is enabled (half-life in days, default: 30). Lower values prioritize recent context more aggressively.",
   "agents.defaults.memorySearch.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
+  "agents.defaults.promptEnhancer":
+    "Optional pre-execution draft stage that rewrites the latest user request into a clearer prompt, echoes it back, and waits for confirmation before the main agent runs.",
+  "agents.defaults.promptEnhancer.enabled":
+    "When enabled, normal text messages first produce a prompt draft plus `/prompt run|edit|show|cancel` controls instead of immediately executing the main agent.",
   memory: "Memory backend configuration (global).",
   "memory.backend":
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',

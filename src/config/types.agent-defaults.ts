@@ -183,6 +183,11 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** Optional prompt enhancement + confirmation stage before execution. */
+  promptEnhancer?: {
+    /** When enabled, inbound text first becomes a reviewed draft before the agent runs. */
+    enabled?: boolean;
+  };
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */

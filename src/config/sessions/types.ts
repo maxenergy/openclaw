@@ -162,6 +162,7 @@ export type SessionEntry = {
   lastAccountId?: string;
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
+  promptEnhancerDraft?: PromptEnhancerDraft;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
 };
@@ -316,6 +317,19 @@ export type SessionSkillSnapshot = {
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+};
+
+export type PromptEnhancerDraft = {
+  id: string;
+  createdAt: number;
+  originalPrompt: string;
+  enhancedPrompt: string;
+  goal?: string;
+  constraints?: string[];
+  assumptions?: string[];
+  clarifyingQuestions?: string[];
+  modelProvider?: string;
+  model?: string;
 };
 
 export type SessionSystemPromptReport = {

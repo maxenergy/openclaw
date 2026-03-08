@@ -189,6 +189,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "prompt",
+      nativeName: "prompt",
+      description: "Review or confirm a pending prompt draft before execution.",
+      textAlias: "/prompt",
+      acceptsArgs: true,
+      category: "management",
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",

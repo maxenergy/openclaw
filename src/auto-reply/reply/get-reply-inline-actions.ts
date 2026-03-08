@@ -27,6 +27,7 @@ import { buildStatusReply, handleCommands } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import { maybeHandlePromptEnhancer } from "./prompt-enhancer.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
@@ -182,6 +183,7 @@ export async function handleInlineActions(params: {
           skillCommands,
         })
       : null;
+  const skipPromptEnhancer = skillInvocation != null;
   if (skillInvocation) {
     if (!command.isAuthorizedSender) {
       logVerbose(
@@ -408,6 +410,30 @@ export async function handleInlineActions(params: {
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: commandResult.reply };
+  }
+
+  const promptEnhancerResult = skipPromptEnhancer
+    ? null
+    : await maybeHandlePromptEnhancer({
+        ctx,
+        sessionCtx,
+        cfg,
+        agentId,
+        agentDir,
+        workspaceDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        command,
+        cleanedBody,
+        provider,
+        model,
+        opts,
+      });
+  if (promptEnhancerResult?.kind === "reply") {
+    typing.cleanup();
+    return { kind: "reply", reply: promptEnhancerResult.reply };
   }
 
   return {

@@ -48,6 +48,7 @@ const RESERVED_COMMANDS = new Set([
   "debug",
   "allowlist",
   "activation",
+  "prompt",
   // Agent control
   "skill",
   "subagents",

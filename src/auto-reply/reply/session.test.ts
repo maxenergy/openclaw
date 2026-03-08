@@ -1473,6 +1473,58 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     archiveSpy.mockRestore();
   });
 
+  it("clears pending prompt enhancer drafts across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-draft-");
+    const sessionKey = "agent:main:telegram:dm:user-draft-reset";
+    const existingSessionId = "existing-session-draft-reset";
+    const cases = ["/new", "/reset"] as const;
+
+    for (const body of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          promptEnhancerDraft: {
+            id: "draft-1",
+            createdAt: Date.now(),
+            originalPrompt: "deploy the service",
+            enhancedPrompt: "Deploy the service and verify the rollout.",
+          },
+        },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: body,
+          RawBody: body,
+          CommandBody: body,
+          From: "user-draft-reset",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, body).toBe(true);
+      expect(result.sessionEntry.promptEnhancerDraft, body).toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(persisted[sessionKey]?.promptEnhancerDraft, body).toBeUndefined();
+    }
+  });
+
   it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
     // Daily resets occur when the session becomes stale (not via /new or /reset command).
     // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
